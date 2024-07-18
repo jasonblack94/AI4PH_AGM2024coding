@@ -1,0 +1,122 @@
+---
+title: "Ensemble Methods for Clinical Prediction Modelling"
+author: "Jason Black"
+date: "2024-07-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Read in the data
+
+For this exercise, we will be using data from the "medicaldata" library. This is a collection of freely available medical datasets. For more info see https://higgi13425.github.io/medicaldata/.
+
+To access these data, we don't need to download or save anything. Instead, we access them by installing an R package and accessing the data from there.
+
+```{r read data}
+install.packages("medicaldata")
+library(medicaldata)
+
+blood_storage <- medicaldata::blood_storage
+```
+
+We have now read in the dataset "blood_storage" from the "medicaldata" package and stored it as "blood_storage" in our local environment. This dataset is a collection of 316 men from a retrospective cohort study who had their prostates surgically removed. We are interested in using these data to predict prostate cancer recurrence using ensemble methods.
+
+## Cohort description
+
+Let's start by describing our cohort a bit to understand its composition better.
+
+```{r descriptives}
+library(epiDisplay)
+
+summary(blood_storage$Age)
+tab1(blood_storage$FamHx, graph = FALSE)
+tab1(blood_storage$T.Stage, graph = FALSE)
+tab1(blood_storage$bGS, graph = FALSE)
+
+tab1(blood_storage$Recurrence, graph = FALSE)
+```
+
+We note that we have an older cohort, most without a family history of prostate cancer, most with Stage 1/Stage 2a prostate cancers, and most having lower Gleason scores. Of 316 men, 54 experienced recurrence (17.1%).
+
+## Develop several prediction models
+
+To simulate the situation where we have several existing models for prostate cancer recurrence from different studies, we will create several models that use different variables. Let's start by developing one model.
+
+```{r develop model}
+logistic_model1 <- glm(Recurrence ~ Age + FamHx + PVol, data = blood_storage, family = binomial)
+summary(logistic_model1)
+```
+
+Next, let's estimate the risk for each patient in our dataset and assess the model's performance.
+
+```{r predict risk}
+library(pROC)
+blood_storage$predicted_risk1 <- predict(logistic_model1, newdata = blood_storage, type = "response")
+
+logistic_roc1 <- roc(blood_storage$Recurrence, blood_storage$predicted_risk1)
+auc(logistic_roc1)
+```
+
+We've created a model for prostate cancer recurrence based on age, family history, and prostate volume; however, the performance of our model is not great (AUC=0.60). Let's create a few more models then combine them to see if we can do any better.
+
+```{r develop more models}
+logistic_model2 <- glm(Recurrence ~ Age + as.factor(TVol) + as.factor(T.Stage), data = blood_storage, family = binomial)
+logistic_model3 <- glm(Recurrence ~ as.factor(bGS) + `BN+` + OrganConfined, data = blood_storage, family = binomial)
+logistic_model4 <- glm(Recurrence ~ PreopPSA + PreopTherapy + AnyAdjTherapy + AdjRadTherapy, data = blood_storage, family = binomial)
+logistic_model5 <- glm(Recurrence ~ as.factor(T.Stage) + as.factor(bGS) + PreopPSA + AdjRadTherapy, data = blood_storage, family = binomial)
+```
+
+We've created 4 more models for recurrence. Let's look at their performance.
+
+```{r test more models}
+blood_storage$predicted_risk2 <- predict(logistic_model2, newdata = blood_storage, type = "response")
+blood_storage$predicted_risk3 <- predict(logistic_model3, newdata = blood_storage, type = "response")
+blood_storage$predicted_risk4 <- predict(logistic_model4, newdata = blood_storage, type = "response")
+blood_storage$predicted_risk5 <- predict(logistic_model5, newdata = blood_storage, type = "response")
+
+logistic_roc2 <- roc(blood_storage$Recurrence, blood_storage$predicted_risk2)
+logistic_roc3 <- roc(blood_storage$Recurrence, blood_storage$predicted_risk3)
+logistic_roc4 <- roc(blood_storage$Recurrence, blood_storage$predicted_risk4)
+logistic_roc5 <- roc(blood_storage$Recurrence, blood_storage$predicted_risk5)
+
+auc(logistic_roc2)
+auc(logistic_roc3)
+auc(logistic_roc4)
+auc(logistic_roc5)
+```
+
+We're already getting better performance using different variables. Next step: try combining.
+
+## Ensemble methods
+
+Ensemble methods can run each model separately, then combine the estimated risks through various methods. The simplest method to combine predicted risks is to simply take the average (mean). Given we've already run each model individually, all we need to do is combine our estimates and assess the performance.
+
+```{r combine predictions}
+blood_storage <- blood_storage %>% rowwise() %>% mutate(ensemble_risk = mean(c(predicted_risk1,
+                                                               predicted_risk2,
+                                                               predicted_risk3,
+                                                               predicted_risk4,
+                                                               predicted_risk5), na.rm = TRUE))
+
+ensemble_roc <- roc(blood_storage$Recurrence, blood_storage$ensemble_risk)
+auc(ensemble_roc)
+
+```
+
+Recall that the best performance of an individual model we saw was 0.7626; using our ensemble model, we've now achieved an even better performance: 0.7878.
+
+Note that we've ignored several other considerations for the purposes of this example: missing data, availability of predictors, overfitting and optimism, calibration, etc. 
+
